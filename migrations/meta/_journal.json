@@ -8,6 +8,13 @@
       "when": 1739907239999,
       "tag": "0000_cloudy_preak",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1740741176799,
+      "tag": "0001_giant_lizard",
+      "breakpoints": true
     }
   ]
 }
