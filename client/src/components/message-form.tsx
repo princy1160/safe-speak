@@ -22,37 +22,60 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/hooks/use-auth";
 import { Loader2 } from "lucide-react";
+import { useEffect } from "react";
 
 export function MessageForm() {
   const { toast } = useToast();
   const { user } = useAuth();
 
+  // Form Initialization
   const form = useForm({
     resolver: zodResolver(insertMessageSchema),
     defaultValues: {
+      userId: user?.id || "",
       content: "",
       visibility: "public",
       domain: user?.domain || "",
     },
   });
 
+  // Update user details dynamically
+  useEffect(() => {
+    if (user) {
+      form.setValue("userId", user.id || "");
+      form.setValue("domain", user.domain || "");
+    }
+  }, [user, form]);
+
+  // API Mutation for message submission
   const mutation = useMutation({
     mutationFn: async (data: any) => {
+      console.log("Submitting message:", data);
       const res = await apiRequest("POST", "/api/messages", data);
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(errorText);
+      }
       return res.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/messages"] });
-      form.reset();
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/messages", variables.visibility] });
+      form.reset({
+        userId: user?.id || "",
+        content: "",
+        visibility: "public",
+        domain: user?.domain || "",
+      });
       toast({
-        title: "Message sent",
-        description: "Your message has been sent successfully.",
+        title: "Message Sent",
+        description: "Your message has been posted successfully.",
       });
     },
     onError: (error: Error) => {
+      console.error("Message submission error:", error);
       toast({
         title: "Error",
         description: error.message,
@@ -63,12 +86,13 @@ export function MessageForm() {
 
   return (
     <Card>
-      <CardContent className="pt-6">
+      <CardHeader>
+        <CardTitle className="text-lg font-semibold">Send an Anonymous Message</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
         <Form {...form}>
-          <form
-            onSubmit={form.handleSubmit((data) => mutation.mutate(data))}
-            className="space-y-4"
-          >
+          <form onSubmit={form.handleSubmit((data) => mutation.mutate(data))} className="space-y-4">
+            {/* Message Content */}
             <FormField
               control={form.control}
               name="content"
@@ -76,26 +100,28 @@ export function MessageForm() {
                 <FormItem>
                   <FormLabel>Message</FormLabel>
                   <FormControl>
-                    <Textarea {...field} placeholder="Type your message here..." />
+                    <Textarea
+                      {...field}
+                      placeholder="Type your message here..."
+                      className="border border-gray-300 bg-white text-black"
+                    />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
               )}
             />
 
+            {/* Visibility Selection */}
             <FormField
               control={form.control}
               name="visibility"
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>Visibility</FormLabel>
-                  <Select
-                    onValueChange={field.onChange}
-                    defaultValue={field.value}
-                  >
+                  <Select onValueChange={field.onChange} value={field.value}>
                     <FormControl>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select visibility" />
+                      <SelectTrigger className="border border-gray-300 bg-white text-black">
+                        <SelectValue>{field.value || "Select visibility"}</SelectValue>
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
@@ -109,24 +135,30 @@ export function MessageForm() {
               )}
             />
 
-            <FormField
-              control={form.control}
-              name="domain"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Domain</FormLabel>
-                  <FormControl>
-                    <Input {...field} placeholder="Enter domain (if required)" />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            {/* Domain Field (Only shows if "domain" visibility is selected) */}
+            {form.watch("visibility") === "domain" && (
+              <FormField
+                control={form.control}
+                name="domain"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Domain</FormLabel>
+                    <FormControl>
+                      <Input
+                        {...field}
+                        placeholder="Enter domain (if required)"
+                        className="border border-gray-300 bg-white text-black"
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
-            <Button type="submit" disabled={mutation.isPending}>
-              {mutation.isPending && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}
+            {/* Submit Button */}
+            <Button type="submit" className="w-full" disabled={mutation.isPending}>
+              {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Send Message
             </Button>
           </form>
