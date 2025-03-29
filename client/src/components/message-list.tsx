@@ -5,18 +5,38 @@ import { useAuth } from "@/hooks/use-auth";
 import { Loader2 } from "lucide-react";
 import { format } from "date-fns";
 
+const API_BASE_URL = "http://localhost:5000"; // Change if needed
+
 export function MessageList({ visibility = "public" }: { visibility?: string }) {
   const { user } = useAuth();
 
-  const { data: messages, isLoading } = useQuery<Message[]>({
-    queryKey: ["/api/messages", { visibility }],
-    queryFn: async ({ queryKey }) => {
-      const [_, params] = queryKey;
-      const searchParams = new URLSearchParams(params as Record<string, string>);
-      const res = await fetch(`/api/messages?${searchParams}`);
-      if (!res.ok) throw new Error("Failed to fetch messages");
+  console.log("Fetching messages with visibility:", visibility);
+
+  const { data: messages, isLoading, error } = useQuery<Message[]>({
+    queryKey: ["/api/messages", visibility],
+    queryFn: async () => {
+      const searchParams = new URLSearchParams({ visibility });
+      const url = `${API_BASE_URL}/api/messages?${searchParams}`;
+      console.log("Fetching from:", url);
+
+      const res = await fetch(url, {
+        credentials: "include", // Ensure cookies are sent for authentication
+      });
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error("API Error:", errorText);
+        throw new Error(`Failed to fetch messages: ${errorText}`);
+      }
+
+      const contentType = res.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        throw new Error("Received non-JSON response from API");
+      }
+
       return res.json();
     },
+    staleTime: 1000 * 60, // Cache messages for 1 min
   });
 
   if (isLoading) {
@@ -27,7 +47,18 @@ export function MessageList({ visibility = "public" }: { visibility?: string }) 
     );
   }
 
-  if (!messages?.length) {
+  if (error) {
+    return (
+      <Card>
+        <CardContent className="p-8 text-center text-red-500">
+          <p>Error loading messages</p>
+          <p className="text-xs">{error.message}</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (!messages || messages.length === 0) {
     return (
       <Card>
         <CardContent className="p-8 text-center text-muted-foreground">
