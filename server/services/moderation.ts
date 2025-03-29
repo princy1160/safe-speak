@@ -13,7 +13,7 @@ const openai = new OpenAI({
 const inappropriatePatterns = {
   profanity: [
     'fuck', 'shit', 'ass', 'bitch', 'bastard', 'cunt', 'dick', 'pussy', 'cock', 'whore',
-    'slut', 'damn', 'piss', 'cock', 'tits', 'titties', 'boobs', 'vagina', 'penis',
+    'slut', 'damn', 'piss', 'cock', 'tits', 'titties', 'boobs', 'vagina', 'penis','fucker',
     // Common variations and leetspeak
     'f[u\*@]ck', 'sh[i\*@]t', 'b[i\*@]tch', 'a[s\$][$s]', 'p[u\*@]ssy',
     // Numerical substitutions
