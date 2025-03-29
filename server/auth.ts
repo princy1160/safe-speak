@@ -36,8 +36,8 @@ export function setupAuth(app: Express) {
   // Enable CORS with credentials
   app.use(
     cors({
-      origin: process.env.CLIENT_ORIGIN || "http://localhost:5173", // Update as needed
-      credentials: true,
+      origin: "http://localhost:5173", // Update as needed
+      credentials: true, // Allows cookies to be sent with requests
     })
   );
 
@@ -48,8 +48,8 @@ export function setupAuth(app: Express) {
     store: storage.sessionStore,
     cookie: {
       httpOnly: true,
-      secure: app.get("env") === "production", // Only secure in production
-      sameSite: "lax", // Ensures proper cross-site request behavior
+      secure: app.get("env") === "production", // Use HTTPS in production
+      sameSite: app.get("env") === "production" ? "lax" : "none", // Cross-origin handling
     },
   };
 
@@ -111,14 +111,18 @@ export function setupAuth(app: Express) {
     passport.authenticate("local", (err: Error | null, user: Express.User | false, info?: { message: string }) => {
       if (err) return next(err);
       if (!user) return res.status(401).json({ error: info?.message || "Login failed" });
-  
+
       req.login(user, (err: Error | null) => {
         if (err) return next(err);
-        res.status(200).json(user);
+        
+        // Send user data after login
+        res.status(200).json({ 
+          id: user.id, 
+          username: user.username 
+        });
       });
     })(req, res, next);
   });
-  
 
   app.post("/api/logout", (req, res, next) => {
     req.logout((err) => {
