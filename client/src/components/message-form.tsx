@@ -1,169 +1,163 @@
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { insertMessageSchema } from "@shared/schema";
+import { useState } from "react";
+import { useAuth } from "@/hooks/use-auth";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { useToast } from "@/hooks/use-toast";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "@/components/ui/form";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { useAuth } from "@/hooks/use-auth";
-import { Loader2 } from "lucide-react";
-import { useEffect } from "react";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { useToast } from "@/hooks/use-toast";
 
-export function MessageForm() {
-  const { toast } = useToast();
+interface MessageComposerProps {
+  onVulgarContent: (content: string) => void;
+  onCrisisDetected: (type: 'suicide' | 'depression' | 'general', message: string) => void;
+}
+
+export default function MessageComposer({ onVulgarContent, onCrisisDetected }: MessageComposerProps) {
   const { user } = useAuth();
-
-  // Form Initialization
-  const form = useForm({
-    resolver: zodResolver(insertMessageSchema),
-    defaultValues: {
-      userId: user?.id || "",
-      content: "",
-      visibility: "public",
-      domain: user?.domain || "",
+  const { toast } = useToast();
+  const [isAnonymous, setIsAnonymous] = useState(false);
+  const [content, setContent] = useState("");
+  const [recipientType, setRecipientType] = useState("public");
+  
+  const createMessageMutation = useMutation({
+    mutationFn: async (data: {
+      content: string;
+      isAnonymous: boolean;
+      recipientType: string;
+    }) => {
+      const res = await apiRequest("POST", "/api/messages", data);
+      return await res.json();
+    },
+    onSuccess: (data) => {
+      setContent("");
+      
+      if (data.crisis?.detected) {
+        // Show user their message wasn't anonymous if force-identified
+        if (data.crisis.forceIdentified && isAnonymous) {
+          toast({
+            title: "Important notice",
+            description: "For safety reasons, suicide-related messages in public forums cannot be anonymous. Your identity has been included with this message and counselors have been notified.",
+            variant: "destructive",
+            duration: 10000, // Show for 10 seconds
+          });
+        }
+        
+        // Show the crisis response modal
+        onCrisisDetected(data.crisis.type, content);
+      } else {
+        toast({
+          title: "Message sent",
+          description: "Your message has been sent successfully",
+        });
+      }
+      
+      // Invalidate messages query to refresh list
+      queryClient.invalidateQueries({ queryKey: ["/api/messages"] });
+    },
+    onError: (error: any) => {
+      // Check if error is because of vulgar content
+      if (error.status === 400 && error.vulgarContent) {
+        onVulgarContent(error.highlightedContent);
+      } else {
+        toast({
+          title: "Failed to send message",
+          description: error.message || "An error occurred",
+          variant: "destructive",
+        });
+      }
     },
   });
-
-  // Update user details dynamically
-  useEffect(() => {
-    if (user) {
-      form.setValue("userId", user.id || "");
-      form.setValue("domain", user.domain || "");
-    }
-  }, [user, form]);
-
-  // API Mutation for message submission
-  const mutation = useMutation({
-    mutationFn: async (data: any) => {
-      console.log("Submitting message:", data);
-      const res = await apiRequest("POST", "/api/messages", data);
-      if (!res.ok) {
-        const errorText = await res.text();
-        throw new Error(errorText);
-      }
-      return res.json();
-    },
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/messages", variables.visibility] });
-      form.reset({
-        userId: user?.id || "",
-        content: "",
-        visibility: "public",
-        domain: user?.domain || "",
-      });
+  
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!content.trim()) {
       toast({
-        title: "Message Sent",
-        description: "Your message has been posted successfully.",
-      });
-    },
-    onError: (error: Error) => {
-      console.error("Message submission error:", error);
-      toast({
-        title: "Error",
-        description: error.message,
+        title: "Empty message",
+        description: "Please enter a message",
         variant: "destructive",
       });
-    },
-  });
-
+      return;
+    }
+    
+    createMessageMutation.mutate({
+      content,
+      isAnonymous,
+      recipientType,
+    });
+  };
+  
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-lg font-semibold">Send an Anonymous Message</CardTitle>
+        <CardTitle>Share Your Thoughts</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
-        <Form {...form}>
-          <form onSubmit={form.handleSubmit((data) => mutation.mutate(data))} className="space-y-4">
-            {/* Message Content */}
-            <FormField
-              control={form.control}
-              name="content"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Message</FormLabel>
-                  <FormControl>
-                    <Textarea
-                      {...field}
-                      placeholder="Type your message here..."
-                      className="border border-gray-300 bg-white text-black"
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
+      <CardContent>
+        <form className="space-y-6" onSubmit={handleSubmit}>
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <Label htmlFor="message">Your Message</Label>
+              <div className="flex items-center space-x-2">
+                <span className="text-sm text-gray-500">Anonymous</span>
+                <Switch
+                  checked={isAnonymous}
+                  onCheckedChange={setIsAnonymous}
+                  aria-label="Toggle anonymous"
+                />
+              </div>
+            </div>
+            <Textarea
+              id="message"
+              placeholder="Type your message here..."
+              rows={5}
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              className="resize-none"
             />
-
-            {/* Visibility Selection */}
-            <FormField
-              control={form.control}
-              name="visibility"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Visibility</FormLabel>
-                  <Select onValueChange={field.onChange} value={field.value}>
-                    <FormControl>
-                      <SelectTrigger className="border border-gray-300 bg-white text-black">
-                        <SelectValue>{field.value || "Select visibility"}</SelectValue>
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      <SelectItem value="public">Public</SelectItem>
-                      <SelectItem value="domain">Domain Only</SelectItem>
-                      <SelectItem value="admin">Admin Only</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            {/* Domain Field (Only shows if "domain" visibility is selected) */}
-            {form.watch("visibility") === "domain" && (
-              <FormField
-                control={form.control}
-                name="domain"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Domain</FormLabel>
-                    <FormControl>
-                      <Input
-                        {...field}
-                        placeholder="Enter domain (if required)"
-                        className="border border-gray-300 bg-white text-black"
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            )}
-
-            {/* Submit Button */}
-            <Button type="submit" className="w-full" disabled={mutation.isPending}>
-              {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Send Message
-            </Button>
-          </form>
-        </Form>
+          </div>
+          
+          <div>
+            <Label className="block mb-2">Send To</Label>
+            <div className="grid grid-cols-3 gap-3">
+              <Button
+                type="button"
+                variant={recipientType === "public" ? "default" : "outline"}
+                className="w-full"
+                onClick={() => setRecipientType("public")}
+              >
+                Public
+              </Button>
+              <Button
+                type="button"
+                variant={recipientType === "faculty" ? "default" : "outline"}
+                className="w-full"
+                onClick={() => setRecipientType("faculty")}
+              >
+                Faculty
+              </Button>
+              <Button
+                type="button"
+                variant={recipientType === "counselor" ? "default" : "outline"}
+                className="w-full"
+                onClick={() => setRecipientType("counselor")}
+              >
+                Counselor
+              </Button>
+            </div>
+          </div>
+          
+          <Button 
+            type="submit" 
+            className="w-full"
+            disabled={createMessageMutation.isPending}
+          >
+            {createMessageMutation.isPending ? "Sending..." : "Send Message"}
+          </Button>
+        </form>
       </CardContent>
     </Card>
   );
 }
+
