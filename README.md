@@ -12,7 +12,7 @@ Create a `.env` file in the root directory with the following variables:
 ```env
 DATABASE_URL=postgresql://[user]:[password]@[host]:[port]/[dbname]
 NODE_ENV=development
-REPL_ID=[any-random-string-for-session-secret]
+SESSION_SECRET=[any-random-string-for-session-secret]
 ```
 
 4. Initialize the database:
