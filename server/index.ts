@@ -1,57 +1,11 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
-import rateLimit from "express-rate-limit";
-
-import helmet from "helmet";
-import { config } from "./config";
-import session from "express-session";
-import cors from "cors";
-
-
 
 const app = express();
-
-// ✅ Trust proxy for secure cookies
-app.set("trust proxy", 1);
-
-// ✅ Fix: Apply CORS before session
-app.use(cors({
-  origin: "http://localhost:5173",  // Allow only your frontend
-  credentials: true,  // Allow cookies, sessions, authentication headers
-  methods: "GET,POST,PUT,DELETE",
-  allowedHeaders: "Content-Type,Authorization"
-}));
-
-// ✅ Fix: Apply rate limiting early
-app.use(rateLimit(config.rateLimit));
-
-// ✅ Fix: Adjust security settings for session handling
-app.use(
-  helmet({
-    contentSecurityPolicy: false, // Disabled for development; enable in production
-    crossOriginEmbedderPolicy: false, 
-    crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" },
-    crossOriginResourcePolicy: { policy: "cross-origin" }, 
-  })
-);
-
-// ✅ Fix: Ensure session middleware is properly configured
-app.use(session({
-    secret: process.env.SESSION_SECRET as string,
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-        secure: false,  // Set `true` in production with HTTPS
-        httpOnly: true,
-        sameSite: "lax",
-    },
-}));
-
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
-// ✅ Log Middleware (No Changes)
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
@@ -83,33 +37,35 @@ app.use((req, res, next) => {
 });
 
 (async () => {
-  const server = registerRoutes(app);
+  const server = await registerRoutes(app);
 
-  // ✅ Error Handling (No Changes)
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
 
-    // Don't expose stack traces in production
-    const error = config.environment === "development"
-      ? { message, stack: err.stack }
-      : { message };
-
-    res.status(status).json(error);
-
-    if (status >= 500) {
-      console.error("[Error]", err);
-    }
+    res.status(status).json({ message });
+    throw err;
   });
 
-  if (config.environment === "development") {
+  // importantly only setup vite in development and after
+  // setting up all the other routes so the catch-all route
+  // doesn't interfere with the other routes
+  if (app.get("env") === "development") {
     await setupVite(app, server);
   } else {
     serveStatic(app);
   }
 
-  const PORT = Number(process.env.PORT) || 5000;
-  server.listen(PORT, "0.0.0.0", () => {
-    log(`serving on port ${PORT}`);
-  });
+  // ALWAYS serve the app on port 5000
+  // this serves both the API and the client.
+  // It is the only port that is not firewalled.
+  const port = 5000;
+
+// ✅ Cross-platform listen (works on Windows)
+server.listen(port, () => {
+  log(`serving on port ${port}`);
+});
+  
 })();
+
+
