@@ -1,33 +1,37 @@
 import { Switch, Route } from "wouter";
-import { queryClient } from "./lib/queryClient";
-import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import NotFound from "@/pages/not-found";
-import HomePage from "@/pages/home-page";
 import AuthPage from "@/pages/auth-page";
-import AdminPage from "@/pages/admin-page";
-import { AuthProvider } from "@/hooks/use-auth";
+import HomePage from "@/pages/home-page";
+import ProfileSetup from "@/pages/profile-setup";
+import PlatformIntro from "@/pages/platform-intro";
 import { ProtectedRoute } from "./lib/protected-route";
-
-function Router() {
-  return (
-    <Switch>
-      <ProtectedRoute path="/" component={HomePage} />
-      <ProtectedRoute path="/admin" component={AdminPage} />
-      <Route path="/auth" component={AuthPage} />
-      <Route component={NotFound} />
-    </Switch>
-  );
-}
+import { QueryClientProvider } from "@tanstack/react-query";
+import { queryClient } from "./lib/queryClient";
+import { AuthProvider } from "./hooks/use-auth";
 
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <Router />
-        <Toaster />
+        <AppContent />
       </AuthProvider>
     </QueryClientProvider>
+  );
+}
+
+function AppContent() {
+  return (
+    <>
+      <Switch>
+        <Route path="/auth" component={AuthPage} />
+        <ProtectedRoute path="/" component={HomePage} />
+        <ProtectedRoute path="/profile-setup" component={ProfileSetup} />
+        <ProtectedRoute path="/platform-intro" component={PlatformIntro} />
+        <Route component={NotFound} />
+      </Switch>
+      <Toaster />
+    </>
   );
 }
 
