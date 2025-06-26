@@ -1,138 +1,246 @@
-import passport from "passport";
-import { Strategy as LocalStrategy } from "passport-local";
-import { Express } from "express";
-import session from "express-session";
-import { scrypt, randomBytes, timingSafeEqual } from "crypto";
-import { promisify } from "util";
+import { Express, Request, Response } from "express";
 import { storage } from "./storage";
-import { User as SelectUser } from "@shared/schema";
-import cors from "cors";
-import dotenv from "dotenv";
-
-dotenv.config({ path: './server/.env' });
+import { 
+  loginSchema,
+  otpVerificationSchema,
+  profileUpdateSchema,
+  User,
+  LoginData,
+  OtpVerification,
+  ProfileUpdate
+} from "@shared/schema";
+import { z } from "zod";
+import { randomInt } from "crypto";
 
 declare global {
   namespace Express {
-    interface User extends SelectUser {}
+    interface Request {
+      user?: User;
+    }
   }
 }
 
-const scryptAsync = promisify(scrypt);
-
-async function hashPassword(password: string) {
-  const salt = randomBytes(16).toString("hex");
-  const buf = (await scryptAsync(password, salt, 64)) as Buffer;
-  return `${buf.toString("hex")}.${salt}`;
+// Store OTPs in memory (in a real app, use a database with expiration)
+interface OtpEntry {
+  email: string;
+  otp: string;
+  createdAt: Date;
 }
 
-async function comparePasswords(supplied: string, stored: string) {
-  const [hashed, salt] = stored.split(".");
-  const hashedBuf = Buffer.from(hashed, "hex");
-  const suppliedBuf = (await scryptAsync(supplied, salt, 64)) as Buffer;
-  return timingSafeEqual(hashedBuf, suppliedBuf);
+const otpStore: OtpEntry[] = [];
+const OTP_EXPIRY_MINUTES = 10;
+
+/**
+ * Generates a 6-digit OTP
+ */
+function generateOTP(): string {
+  return randomInt(100000, 999999).toString();
 }
 
-export function setupAuth(app: Express) {
-  // Enable CORS with credentials
-  app.use(
-    cors({
-      origin: "http://localhost:5173", // Update as needed
-      credentials: true, // Allows cookies to be sent with requests
-    })
-  );
-
-  const sessionSettings: session.SessionOptions = {
-    secret: process.env.SESSION_SECRET || "default_secret", // Ensure a strong secret
-    resave: false,
-    saveUninitialized: false,
-    store: storage.sessionStore,
-    cookie: {
-      httpOnly: true,
-      secure: app.get("env") === "production", // Use HTTPS in production
-      sameSite: app.get("env") === "production" ? "lax" : "none", // Cross-origin handling
-    },
-  };
-
-  if (app.get("env") === "production") {
-    app.set("trust proxy", 1);
+/**
+ * Stores an OTP for a given email
+ */
+function storeOTP(email: string, otp: string): void {
+  // Remove any existing OTPs for this email
+  const existingIndex = otpStore.findIndex(entry => entry.email === email);
+  if (existingIndex !== -1) {
+    otpStore.splice(existingIndex, 1);
   }
+  
+  // Store new OTP
+  otpStore.push({
+    email,
+    otp,
+    createdAt: new Date()
+  });
+}
 
-  app.use(session(sessionSettings));
-  app.use(passport.initialize());
-  app.use(passport.session());
+/**
+ * Verifies an OTP for a given email
+ */
+function verifyOTP(email: string, otp: string): boolean {
+  const now = new Date();
+  const entry = otpStore.find(entry => entry.email === email && entry.otp === otp);
+  
+  if (!entry) return false;
+  
+  // Check if OTP is expired (10 minutes)
+  const expiryTime = new Date(entry.createdAt);
+  expiryTime.setMinutes(expiryTime.getMinutes() + OTP_EXPIRY_MINUTES);
+  
+  if (now > expiryTime) return false;
+  
+  // Remove the OTP after successful verification
+  const index = otpStore.findIndex(e => e.email === email);
+  otpStore.splice(index, 1);
+  
+  return true;
+}
 
-  passport.use(
-    new LocalStrategy(async (username, password, done) => {
-      try {
-        const user = await storage.getUserByUsername(username);
-        if (!user || !(await comparePasswords(password, user.password))) {
-          return done(null, false, { message: "Invalid credentials" });
-        }
-        return done(null, user);
-      } catch (err) {
-        return done(err);
-      }
-    })
-  );
-
-  passport.serializeUser((user, done) => done(null, user.id));
-  passport.deserializeUser(async (id: number, done) => {
+export function setupAuth(app: Express): void {
+  // Login route: Request OTP
+  app.post("/api/auth/login", async (req: Request, res: Response) => {
     try {
-      const user = await storage.getUser(id);
-      if (!user) return done(null, false);
-      done(null, user);
-    } catch (err) {
-      done(err);
+      const { email } = loginSchema.parse(req.body);
+      
+      // Generate and store OTP
+      const otp = generateOTP();
+      storeOTP(email, otp);
+      
+      // In a real app, this would send the OTP via email
+      console.log(`OTP for ${email}: ${otp}`);
+      
+      // For development purposes only, return OTP in response for easy testing
+      // In a production environment, this should be removed
+      res.status(200).json({ 
+        message: "OTP sent to email", 
+        email,
+        // This allows frontend developers to test without real email integration
+        devOtp: otp 
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ error: error.errors });
+      } else {
+        res.status(500).json({ error: "Server error" });
+      }
     }
   });
-
-  app.post("/api/register", async (req, res, next) => {
+  
+  // Verify OTP and create session
+  app.post("/api/auth/verify", async (req: Request, res: Response) => {
     try {
-      const existingUser = await storage.getUserByUsername(req.body.username);
-      if (existingUser) {
-        return res.status(400).json({ error: "Username already exists" });
+      const { email, otp } = otpVerificationSchema.parse(req.body);
+      
+      // Verify OTP
+      if (!verifyOTP(email, otp)) {
+        return res.status(401).json({ error: "Invalid or expired OTP" });
       }
-
-      const user = await storage.createUser({
-        ...req.body,
-        password: await hashPassword(req.body.password),
-      });
-
-      req.login(user, (err) => {
-        if (err) return next(err);
-        res.status(201).json(user);
-      });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  app.post("/api/login", (req, res, next) => {
-    passport.authenticate("local", (err: Error | null, user: Express.User | false, info?: { message: string }) => {
-      if (err) return next(err);
-      if (!user) return res.status(401).json({ error: info?.message || "Login failed" });
-
-      req.login(user, (err: Error | null) => {
-        if (err) return next(err);
-        
-        // Send user data after login
-        res.status(200).json({ 
-          id: user.id, 
-          username: user.username 
+      
+      // Check if user exists
+      let user = await storage.getUserByEmail(email);
+      
+      // If not, create a new user
+      if (!user) {
+        user = await storage.createUser({
+          email,
+          password: "otp-auth", // Not used with OTP auth
+          profileComplete: false,
+          viewedIntro: false,
         });
+      }
+      
+      // Set user in session
+      req.session.userId = user.id;
+      
+      res.status(200).json({ 
+        user,
+        needsProfileSetup: !user.profileComplete,
+        needsIntro: !user.viewedIntro && user.profileComplete
       });
-    })(req, res, next);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ error: error.errors });
+      } else {
+        res.status(500).json({ error: "Server error" });
+      }
+    }
   });
-
-  app.post("/api/logout", (req, res, next) => {
-    req.logout((err) => {
-      if (err) return next(err);
-      res.sendStatus(200);
+  
+  // Get current user
+  app.get("/api/auth/user", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ error: "Not authenticated" });
+    }
+    
+    const user = await storage.getUser(req.session.userId);
+    if (!user) {
+      req.session.destroy(() => {});
+      return res.status(401).json({ error: "User not found" });
+    }
+    
+    res.status(200).json({ 
+      user,
+      needsProfileSetup: !user.profileComplete,
+      needsIntro: !user.viewedIntro && user.profileComplete
     });
   });
-
-  app.get("/api/user", (req, res) => {
-    if (!req.isAuthenticated()) return res.sendStatus(401);
-    res.json(req.user);
+  
+  // Update user profile
+  app.post("/api/auth/profile", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ error: "Not authenticated" });
+    }
+    
+    try {
+      const { name, profession, whatsappNumber } = profileUpdateSchema.parse(req.body);
+      
+      const updatedUser = await storage.updateUser(req.session.userId, {
+        name,
+        profession,
+        whatsappNumber,
+        profileComplete: true
+      });
+      
+      if (!updatedUser) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      
+      res.status(200).json({ 
+        user: updatedUser,
+        needsProfileSetup: false,
+        needsIntro: !updatedUser.viewedIntro
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ error: error.errors });
+      } else {
+        res.status(500).json({ error: "Server error" });
+      }
+    }
+  });
+  
+  // Mark intro as viewed
+  app.post("/api/auth/intro-viewed", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ error: "Not authenticated" });
+    }
+    
+    const updatedUser = await storage.updateUser(req.session.userId, {
+      viewedIntro: true
+    });
+    
+    if (!updatedUser) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    
+    res.status(200).json({ 
+      user: updatedUser,
+      needsProfileSetup: false,
+      needsIntro: false
+    });
+  });
+  
+  // Logout
+  app.post("/api/auth/logout", (req: Request, res: Response) => {
+    req.session.destroy(() => {
+      res.status(200).json({ message: "Logged out successfully" });
+    });
+  });
+  
+  // Auth middleware for protected routes
+  app.use("/api/messages", async (req: Request, res: Response, next) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ error: "Not authenticated" });
+    }
+    
+    const user = await storage.getUser(req.session.userId);
+    if (!user) {
+      req.session.destroy(() => {});
+      return res.status(401).json({ error: "User not found" });
+    }
+    
+    req.user = user;
+    next();
   });
 }
